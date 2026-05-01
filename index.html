@@ -1253,7 +1253,18 @@ async function genererWord() {
       linebreaks: true,
     });
 
-    // 🔽 Récupération des données (ADAPTE selon ton form)
+    // 🔧 Fonction pour nettoyer les clés
+    function formatKey(label) {
+      return label
+        .toLowerCase()
+        .normalize("NFD") // enlève accents
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "");
+    }
+
+    // 🔽 Données de base
     const titre1 = document.getElementById("titre_ligne1").value.trim() || "COMPTE RENDU DE CHANTIER";
     const titre2 = document.getElementById("titre_ligne2").value.trim() || "NOM DU SITE";
 
@@ -1262,13 +1273,16 @@ async function genererWord() {
       titre2: titre2,
     };
 
-    // Ajouter les champs dynamiques
+    // 🔥 Injection dynamique sécurisée
     appState.metaFields.forEach(field => {
       if (field.label && field.value) {
-        const key = field.label.toLowerCase().replace(/\s+/g, "_");
+        const key = formatKey(field.label);
         data[key] = field.value;
       }
     });
+
+    // 🧪 DEBUG (super utile)
+    console.log("DATA envoyée au Word :", data);
 
     // Injecter les données
     doc.setData(data);
@@ -1277,7 +1291,7 @@ async function genererWord() {
       doc.render();
     } catch (error) {
       console.error("Erreur template :", error);
-      alert("❌ Erreur dans le template Word (variables mal définies)");
+      alert("❌ Erreur dans le template Word (variable mal écrite ou absente)");
       return;
     }
 
