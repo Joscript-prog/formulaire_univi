@@ -7,10 +7,14 @@
 
 <!-- Bibliothèques -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<!-- PDF  -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<!-- WORD  -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pizzip/3.1.5/pizzip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/docxtemplater/3.37.0/docxtemplater.min.js"></script>
 
 <style>
   /* === COULEURS DE LA CHARTE (extraites au pixel près) === */
@@ -1230,78 +1234,72 @@ async function genererPDF() {
    ==================================================================== */
 async function genererWord() {
   try {
-    // Vérification que le template existe
     const templateUrl = "COMPTE_RENDU_CLIENT_TEMPLATE.docx";
-    
+
+    // Charger le template
     const response = await fetch(templateUrl);
     if (!response.ok) {
-      throw new Error(`Template non trouvé : ${templateUrl}. Assurez-vous que le fichier COMPTE_RENDU_CLIENT_TEMPLATE.docx est dans le même dossier que le HTML.`);
+      throw new Error("Template introuvable");
     }
-    const templateBlob = await response.blob();
 
-    const zip = await JSZip.loadAsync(templateBlob);
-    
-    // Lire le document.xml du template
-    let documentXml = await zip.file("word/document.xml").async("string");
+    const content = await response.arrayBuffer();
 
+    // Charger avec PizZip
+    const zip = new PizZip(content);
+
+    // Initialiser docxtemplater
+    const doc = new window.docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+    });
+
+    // 🔽 Récupération des données (ADAPTE selon ton form)
     const titre1 = document.getElementById("titre_ligne1").value.trim() || "COMPTE RENDU DE CHANTIER";
     const titre2 = document.getElementById("titre_ligne2").value.trim() || "NOM DU SITE";
 
-    // === REMPLACEMENT DES TEXTES DANS LE TEMPLATE ===
-    // Titre principal
-    documentXml = documentXml.replace(/COMPTE RENDU DE CHANTIER/g, titre1);
-    documentXml = documentXml.replace(/UNIVI - FONTAINE/g, titre2);
+    let data = {
+      titre1: titre1,
+      titre2: titre2,
+    };
 
-    // Métadonnées (remplacement des placeholders comme [OBJET], [RESPONSABLE], etc.)
+    // Ajouter les champs dynamiques
     appState.metaFields.forEach(field => {
       if (field.label && field.value) {
-        const placeholder = `[${field.label.toUpperCase()}]`;
-        const regex = new RegExp(placeholder, 'g');
-        documentXml = documentXml.replace(regex, field.value);
+        const key = field.label.toLowerCase().replace(/\s+/g, "_");
+        data[key] = field.value;
       }
     });
 
-    // Mise à jour du document.xml
-    zip.file("word/document.xml", documentXml);
+    // Injecter les données
+    doc.setData(data);
 
-    // === GESTION DES PHOTOS ===
-    // On va remplacer les images du template par celles uploadées par l'utilisateur
-    const imageFiles = zip.file(/word\/media\/image\d+\.(png|jpg|jpeg|gif)/i);
-    
-    let photoIndex = 0;
-    for (const journee of appState.journees) {
-      for (const section of journee.sectionsPhotos) {
-        for (const photo of section.photos || []) {
-          if (photo.dataUrl && photoIndex < imageFiles.length) {
-            const imageFile = imageFiles[photoIndex];
-            if (imageFile) {
-              const imgData = photo.dataUrl.split(',')[1];
-              const imgBytes = Uint8Array.from(atob(imgData), c => c.charCodeAt(0));
-              zip.file(imageFile.name, imgBytes);
-              photoIndex++;
-            }
-          }
-        }
-      }
+    try {
+      doc.render();
+    } catch (error) {
+      console.error("Erreur template :", error);
+      alert("❌ Erreur dans le template Word (variables mal définies)");
+      return;
     }
 
-    // Générer le nouveau document
-    const newBlob = await zip.generateAsync({ type: "blob" });
+    // Générer le fichier
+    const blob = doc.getZip().generate({
+      type: "blob",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
 
-    const date = (appState.journees[0] && appState.journees[0].date) 
-                 ? appState.journees[0].date.replace(/-/g, '') 
-                 : new Date().toISOString().slice(0,10).replace(/-/g, '');
+    // Nom du fichier
+    const date = new Date().toISOString().slice(0,10).replace(/-/g, "");
+    const filename = `Compte_Rendu_${titre2.replace(/[^a-zA-Z0-9]/g, "_")}_${date}.docx`;
 
-    const filename = `Compte_Rendu_${titre2.replace(/[^a-zA-Z0-9]/g, '_')}_${date}.docx`;
-    
-    saveAs(newBlob, filename);
-    
-    alert("✅ Document Word généré avec succès !");
+    // Télécharger
+    saveAs(blob, filename);
+
+    alert("✅ Word généré avec succès !");
 
   } catch (error) {
-    console.error("Erreur lors de la génération Word :", error);
-    alert("❌ Erreur lors de la génération du Word :\n" + error.message + 
-          "\n\nAssurez-vous que le fichier 'COMPTE_RENDU_CLIENT_TEMPLATE.docx' est bien dans le même dossier que votre fichier HTML.");
+    console.error(error);
+    alert("❌ Erreur génération Word : " + error.message);
   }
 }
 function bandeauOrangeWord(texte, docx) {
