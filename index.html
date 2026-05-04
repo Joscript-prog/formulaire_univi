@@ -12,9 +12,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
-<!-- WORD -->
-<script src="https://unpkg.com/pizzip@3.1.5/dist/pizzip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/docxtemplater/3.37.0/docxtemplater.min.js"></script>
+<!-- WORD (génération native par code, pas de template) -->
+<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
 <style>
   /* === COULEURS DE LA CHARTE (extraites au pixel près) === */
@@ -1197,12 +1196,175 @@ function renderSectionPhotos(sec) {
 }
 
 /* ====================================================================
-   GÉNÉRATION PDF
+   GÉNÉRATION PDF — Pagination intelligente anti-crop
    ==================================================================== */
 async function genererPDF() {
-  rafraichirApercu();
-  await new Promise(r => setTimeout(r, 300));
+  // 1) Construire dynamiquement les pages dans un conteneur masqué
+  const titre1 = document.getElementById("titre_ligne1").value;
+  const titre2 = document.getElementById("titre_ligne2").value;
 
+  // Container temporaire hors écran pour mesurer
+  const tmpContainer = document.createElement("div");
+  tmpContainer.style.position = "absolute";
+  tmpContainer.style.left = "-99999px";
+  tmpContainer.style.top = "0";
+  tmpContainer.style.width = "210mm";
+  document.body.appendChild(tmpContainer);
+
+  // Hauteur utile par page (297mm - padding haut/bas) en pixels
+  // 1mm ≈ 3.7795 px à 96 DPI
+  const PAGE_HEIGHT_MM = 297;
+  const PADDING_TOP_MM = 12;
+  const PADDING_BOTTOM_MM = 12;
+  const USABLE_HEIGHT_MM = PAGE_HEIGHT_MM - PADDING_TOP_MM - PADDING_BOTTOM_MM;
+  const MM_TO_PX = 3.7795275591;
+  const USABLE_HEIGHT_PX = USABLE_HEIGHT_MM * MM_TO_PX;
+
+  // Crée une page vide avec entête
+  function creerPageVide() {
+    const page = document.createElement("div");
+    page.className = "doc-page";
+    page.style.height = "297mm";
+    page.style.overflow = "hidden";
+    page.innerHTML = renderEntete(titre1, titre2);
+    return page;
+  }
+
+  // Mesure la hauteur d'un élément HTML en l'insérant temporairement
+  function mesurerHauteur(html) {
+    const probe = document.createElement("div");
+    probe.style.width = "100%";
+    probe.innerHTML = html;
+    tmpContainer.appendChild(probe);
+    const h = probe.offsetHeight;
+    tmpContainer.removeChild(probe);
+    return h;
+  }
+
+  // Mesure la hauteur de l'entête (logos + titre) une fois pour toutes
+  const probEntete = creerPageVide();
+  tmpContainer.appendChild(probEntete);
+  const HAUTEUR_ENTETE_PX = probEntete.firstChild.offsetHeight;
+  tmpContainer.removeChild(probEntete);
+
+  // Calculer la hauteur disponible APRÈS l'entête
+  const HAUTEUR_DISPO_PX = USABLE_HEIGHT_PX - HAUTEUR_ENTETE_PX - 30; // marge de sécurité
+
+  // 2) Construire la liste des "blocs atomiques" à placer sur les pages
+  // Chaque bloc est une string HTML qui ne doit PAS être coupée
+  const blocs = [];
+
+  // Bloc métadonnées (page 1)
+  if (appState.metaFields.length > 0) {
+    let metaHTML = `<div class="doc-meta">`;
+    appState.metaFields.forEach(f => {
+      if (!f.label && !f.value) return;
+      metaHTML += `<p><span class="label">${escapeHtml(f.label)} :</span> <span class="value">${escapeHtml(f.value)}</span></p>`;
+    });
+    metaHTML += `</div>`;
+    blocs.push({ type: "meta", html: metaHTML });
+  }
+
+  // Pour chaque journée
+  appState.journees.forEach(j => {
+    const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
+
+    // Bandeau orange + intro + travaux = 1 bloc atomique (pas trop gros normalement)
+    let entreeJournee = `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
+    if (j.introduction) {
+      entreeJournee += `<div class="doc-travaux"><div class="intro-text">${escapeHtml(j.introduction)}</div></div>`;
+    }
+    if (j.travaux.length > 0) {
+      entreeJournee += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
+    }
+    blocs.push({ type: "journee-tete", html: entreeJournee });
+
+    // Chaque section photos = 1 bloc atomique séparé
+    j.sectionsPhotos.forEach(sec => {
+      blocs.push({ type: "section-photos", html: renderSectionPhotos(sec) });
+    });
+  });
+
+  // Pages extras
+  appState.pagesExtra.forEach(page => {
+    // Bandeau de page extra = nouveau "chapitre"
+    let teteExtra = `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
+    blocs.push({ type: "extra-tete", html: teteExtra, forcerNouvellePage: true });
+
+    page.blocs.forEach(bloc => {
+      if (bloc.type === "texte") {
+        blocs.push({
+          type: "extra-texte",
+          html: `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`
+        });
+      } else if (bloc.type === "puces") {
+        blocs.push({
+          type: "extra-puces",
+          html: `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`
+        });
+      } else if (bloc.type === "photos") {
+        blocs.push({
+          type: "extra-photos",
+          html: renderSectionPhotos(bloc)
+        });
+      }
+    });
+  });
+
+  // 3) Distribuer les blocs sur les pages en respectant la hauteur dispo
+  const pagesHTML = [];
+  let pageCourante = "";
+  let hauteurCourante = 0;
+
+  function viderPageCourante() {
+    if (pageCourante) {
+      pagesHTML.push(pageCourante);
+      pageCourante = "";
+      hauteurCourante = 0;
+    }
+  }
+
+  for (const bloc of blocs) {
+    const hBloc = mesurerHauteur(bloc.html);
+
+    // Si le bloc demande une nouvelle page forcée, on ferme la courante
+    if (bloc.forcerNouvellePage) {
+      viderPageCourante();
+    }
+
+    // Si le bloc seul est plus grand que la page entière, on l'accepte sur sa propre page
+    // (cas extrême : énormément de photos dans une section)
+    if (hBloc > HAUTEUR_DISPO_PX) {
+      viderPageCourante();
+      pagesHTML.push(bloc.html);
+      continue;
+    }
+
+    // Si le bloc ne tient pas dans la page courante, on saute à une nouvelle page
+    if (hauteurCourante + hBloc > HAUTEUR_DISPO_PX) {
+      viderPageCourante();
+    }
+
+    pageCourante += bloc.html;
+    hauteurCourante += hBloc;
+  }
+  viderPageCourante();
+
+  // 4) Assembler le HTML final dans la zone d'aperçu (et donc capturable)
+  let html = "";
+  pagesHTML.forEach(contenu => {
+    html += `<div class="doc-page">`;
+    html += renderEntete(titre1, titre2);
+    html += contenu;
+    html += `</div>`;
+  });
+  document.getElementById("preview_area").innerHTML = html;
+
+  // Nettoyage du conteneur temporaire
+  document.body.removeChild(tmpContainer);
+
+  // 5) Capture chaque page avec html2canvas et assemblage PDF
+  await new Promise(r => setTimeout(r, 400));
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pages = document.querySelectorAll("#preview_area .doc-page");
@@ -1213,7 +1375,13 @@ async function genererPDF() {
   }
 
   for (let i = 0; i < pages.length; i++) {
-    const canvas = await html2canvas(pages[i], { scale: 2, useCORS: true, logging: false, backgroundColor: null });
+    const canvas = await html2canvas(pages[i], {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: null,
+      windowWidth: pages[i].scrollWidth
+    });
     const imgData = canvas.toDataURL("image/jpeg", 0.92);
     const w = pdf.internal.pageSize.getWidth();
     const h = pdf.internal.pageSize.getHeight();
@@ -1227,162 +1395,346 @@ async function genererPDF() {
 }
 
 /* ====================================================================
-   GÉNÉRATION WORD
+   GÉNÉRATION WORD — 100% par code (docx.js)
+   Reproduit fidèlement l'aperçu HTML : couleurs, polices, photos avec
+   légendes blanches superposées, dégradé de fond.
    ==================================================================== */
-/* ====================================================================
-   NOUVELLE FONCTION GENERER WORD - UTILISATION DU TEMPLATE
-   ==================================================================== */
+
+// Constantes de charte (= CSS root du document)
+const COULEURS = {
+  ORANGE_BANDEAU: "FE681B",
+  BLEU_TITRE:     "3823D6",
+  VIOLET_VALEUR:  "5F4E9C",
+  BLEU_MARINE:    "13203F",
+  VIOLET_CONTOUR: "D9D1F6",
+  BLANC:          "FFFFFF"
+};
+const POLICE_PRINCIPALE = "Calibri";
+
 async function genererWord() {
   try {
-    const templateUrl = "COMPTE_RENDU_CLIENT_TEMPLATE.docx";
+    const {
+      Document, Packer, Paragraph, TextRun, ImageRun,
+      Table, TableRow, TableCell, BorderStyle, WidthType,
+      VerticalAlign, AlignmentType, ShadingType, HeightRule,
+      PageOrientation, LevelFormat, convertInchesToTwip
+    } = window.docx;
 
-    // Charger le template
-    const response = await fetch(templateUrl);
-    if (!response.ok) {
-      throw new Error("Template introuvable");
-    }
-
-    const content = await response.arrayBuffer();
-
-    // Charger avec PizZip
-    const zip = new PizZip(content);
-
-    // Initialiser docxtemplater
-    const doc = new window.docxtemplater(zip, {
-      paragraphLoop: true,
-      linebreaks: true,
-    });
-
-    // 🔧 Fonction pour nettoyer les clés
-    function formatKey(label) {
-      return label
-        .toLowerCase()
-        .normalize("NFD") // enlève accents
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9]/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_|_$/g, "");
-    }
-
-    // 🔽 Données de base
     const titre1 = document.getElementById("titre_ligne1").value.trim() || "COMPTE RENDU DE CHANTIER";
-    const titre2 = document.getElementById("titre_ligne2").value.trim() || "NOM DU SITE";
+    const titre2 = document.getElementById("titre_ligne2").value.trim() || "";
 
-    let data = {
-      titre1: titre1,
-      titre2: titre2,
-    };
+    // ============ Construction du contenu ============
+    const children = [];
 
-    // 🔥 Injection dynamique sécurisée
-    appState.metaFields.forEach(field => {
-      if (field.label && field.value) {
-        const key = formatKey(field.label);
-        data[key] = field.value;
-      }
+    // 1) En-tête : logos aux extrémités + titre centré (tableau 3 colonnes)
+    children.push(await construireEnTeteWord(titre1, titre2));
+    children.push(new Paragraph({ text: "", spacing: { before: 100, after: 100 } }));
+
+    // 2) Métadonnées (OBJET, RESPONSABLE, ...)
+    appState.metaFields.forEach(f => {
+      if (!f.label && !f.value) return;
+      children.push(new Paragraph({
+        spacing: { before: 60, after: 60 },
+        children: [
+          new TextRun({
+            text: `${f.label} : `,
+            bold: true,
+            size: 24, // 12pt
+            color: COULEURS.BLEU_TITRE,
+            font: POLICE_PRINCIPALE
+          }),
+          new TextRun({
+            text: f.value || "",
+            size: 24,
+            color: COULEURS.VIOLET_VALEUR,
+            font: POLICE_PRINCIPALE
+          })
+        ]
+      }));
     });
 
-    // 🧪 DEBUG (super utile)
-    console.log("DATA envoyée au Word :", data);
-
-    // Injecter les données
-    doc.setData(data);
-
-    try {
-      doc.render();
-    } catch (error) {
-      console.error("Erreur template :", error);
-      alert("❌ Erreur dans le template Word (variable mal écrite ou absente)");
-      return;
+    // 3) Journées
+    for (const j of appState.journees) {
+      await ajouterJourneeWord(children, j);
     }
 
-    // Générer le fichier
-    const blob = doc.getZip().generate({
-      type: "blob",
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    // 4) Pages additionnelles
+    for (const page of appState.pagesExtra) {
+      // Saut de page avant chaque page additionnelle
+      children.push(new Paragraph({ children: [new TextRun({ text: "", break: 1 })], pageBreakBefore: true }));
+      children.push(bandeauOrangeWord(page.titre));
+      children.push(new Paragraph({ text: "", spacing: { before: 100, after: 100 } }));
+
+      for (const bloc of page.blocs) {
+        if (bloc.type === "texte") {
+          children.push(new Paragraph({
+            spacing: { before: 80, after: 80 },
+            children: [new TextRun({
+              text: bloc.contenu || "",
+              size: 22,
+              color: COULEURS.BLEU_MARINE,
+              font: POLICE_PRINCIPALE
+            })]
+          }));
+        } else if (bloc.type === "puces") {
+          (bloc.items || []).forEach(it => {
+            if (!it.texte) return;
+            children.push(new Paragraph({
+              numbering: { reference: it.niveau === 0 ? "puces" : "souspuces", level: 0 },
+              spacing: { before: 40, after: 40 },
+              children: [new TextRun({
+                text: it.texte,
+                size: 22,
+                color: COULEURS.BLEU_MARINE,
+                font: POLICE_PRINCIPALE
+              })]
+            }));
+          });
+        } else if (bloc.type === "photos") {
+          await ajouterSectionPhotosWord(children, bloc);
+        }
+      }
+    }
+
+    // ============ Création du document ============
+    const doc = new Document({
+      creator: "IPKONEKT",
+      title: titre1,
+      styles: {
+        default: {
+          document: {
+            run: { font: POLICE_PRINCIPALE, size: 22 }
+          }
+        }
+      },
+      numbering: {
+        config: [
+          {
+            reference: "puces",
+            levels: [{
+              level: 0,
+              format: LevelFormat.BULLET,
+              text: "\u2022",
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: { indent: { left: 360, hanging: 260 } },
+                run: { color: COULEURS.BLEU_MARINE }
+              }
+            }]
+          },
+          {
+            reference: "souspuces",
+            levels: [{
+              level: 0,
+              format: LevelFormat.BULLET,
+              text: "\u2013", // tiret demi-cadratin
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: { indent: { left: 720, hanging: 260 } },
+                run: { color: COULEURS.BLEU_MARINE }
+              }
+            }]
+          }
+        ]
+      },
+      sections: [{
+        properties: {
+          page: {
+            margin: {
+              top:    convertInchesToTwip(0.47), // ~12mm
+              right:  convertInchesToTwip(0.55), // ~14mm
+              bottom: convertInchesToTwip(0.47),
+              left:   convertInchesToTwip(0.55)
+            }
+          }
+        },
+        children: children
+      }]
     });
 
-    // Nom du fichier
-    const date = new Date().toISOString().slice(0,10).replace(/-/g, "");
-    const filename = `Compte_Rendu_${titre2.replace(/[^a-zA-Z0-9]/g, "_")}_${date}.docx`;
+    // ============ Génération du blob ============
+    const blob = await Packer.toBlob(doc);
 
-    // Télécharger
+    // Nom de fichier
+    const dateStr = (appState.journees[0] && appState.journees[0].date) || new Date().toISOString().slice(0,10);
+    const titreClean = titre2.replace(/[^a-zA-Z0-9]/g, "_") || "rapport";
+    const filename = `Compte_Rendu_${titreClean}_${dateStr}.docx`;
+
     saveAs(blob, filename);
-
     alert("✅ Word généré avec succès !");
-
-  } catch (error) {
-    console.error(error);
-    alert("❌ Erreur génération Word : " + error.message);
+  } catch (err) {
+    console.error(err);
+    alert("❌ Erreur génération Word : " + err.message);
   }
 }
-function bandeauOrangeWord(texte, docx) {
-  const { Paragraph, TextRun, Table, TableRow, TableCell,
-          BorderStyle, WidthType, ShadingType } = docx;
+
+/* -------- Helpers Word -------- */
+
+function noBordersWord() {
+  const { BorderStyle } = window.docx;
   const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
-  const noBd = { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none };
+  return { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none };
+}
+
+// En-tête : tableau 3 colonnes (logo gauche | titre centré | logo droite)
+async function construireEnTeteWord(titre1, titre2) {
+  const { Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
+          AlignmentType, VerticalAlign, WidthType } = window.docx;
+
+  const logoIpkBytes = await dataUrlToUint8Array(LOGO_IPKONEKT);
+  const logoBouBytes = await dataUrlToUint8Array(LOGO_BOUYGUES);
+
+  const cellLogoGauche = new TableCell({
+    borders: noBordersWord(),
+    width: { size: 1800, type: WidthType.DXA },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({
+      alignment: AlignmentType.LEFT,
+      children: [new ImageRun({
+        data: logoIpkBytes,
+        transformation: { width: 95, height: 75 },
+        type: "png"
+      })]
+    })]
+  });
+
+  const cellTitre = new TableCell({
+    borders: noBordersWord(),
+    width: { size: 5400, type: WidthType.DXA },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 60 },
+        children: [new TextRun({
+          text: titre1,
+          bold: true,
+          size: 36, // 18pt
+          color: COULEURS.BLEU_TITRE,
+          font: POLICE_PRINCIPALE
+        })]
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 0, after: 0 },
+        children: [new TextRun({
+          text: titre2,
+          bold: true,
+          size: 36,
+          color: COULEURS.BLEU_TITRE,
+          font: POLICE_PRINCIPALE
+        })]
+      })
+    ]
+  });
+
+  const cellLogoDroite = new TableCell({
+    borders: noBordersWord(),
+    width: { size: 1800, type: WidthType.DXA },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      children: [new ImageRun({
+        data: logoBouBytes,
+        transformation: { width: 110, height: 75 },
+        type: "png"
+      })]
+    })]
+  });
+
   return new Table({
-    width: { size: 9026, type: WidthType.DXA },
-    columnWidths: [9026],
-    borders: noBd,
+    width: { size: 9000, type: WidthType.DXA },
+    columnWidths: [1800, 5400, 1800],
+    borders: noBordersWord(),
+    rows: [new TableRow({ children: [cellLogoGauche, cellTitre, cellLogoDroite] })]
+  });
+}
+
+// Bandeau orange (JOURNEE / DEMANDE D'INFORMATION)
+function bandeauOrangeWord(texte) {
+  const { Paragraph, TextRun, Table, TableRow, TableCell,
+          WidthType, ShadingType } = window.docx;
+  return new Table({
+    width: { size: 9000, type: WidthType.DXA },
+    columnWidths: [9000],
+    borders: noBordersWord(),
     rows: [new TableRow({
       children: [new TableCell({
-        borders: noBd,
-        width: { size: 9026, type: WidthType.DXA },
-        shading: { fill: "FE681B", type: ShadingType.CLEAR },
-        margins: { top: 100, bottom: 100, left: 200, right: 200 },
+        borders: noBordersWord(),
+        width: { size: 9000, type: WidthType.DXA },
+        shading: { fill: COULEURS.ORANGE_BANDEAU, type: ShadingType.CLEAR },
+        margins: { top: 120, bottom: 120, left: 220, right: 220 },
         children: [new Paragraph({
-          children: [new TextRun({ text: texte, bold: true, size: 26, color: "FFFFFF" })]
+          children: [new TextRun({
+            text: texte,
+            bold: true,
+            size: 28, // 14pt
+            color: COULEURS.BLANC,
+            font: POLICE_PRINCIPALE
+          })]
         })]
       })]
     })]
   });
 }
 
-async function ajouterJourneeWord(children, j, docx) {
-  const { Paragraph, TextRun, LevelFormat } = docx;
+async function ajouterJourneeWord(children, j) {
+  const { Paragraph, TextRun } = window.docx;
   const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
-  // Bandeau journée
-  children.push(bandeauOrangeWord(`JOURNEE ${j.numero} – ${j.jourSemaine} ${dateF}`, docx));
-  children.push(new Paragraph({ text: "", spacing: { before: 100 } }));
 
-  // Intro
+  // Bandeau JOURNEE
+  children.push(bandeauOrangeWord(`JOURNEE ${j.numero} – ${j.jourSemaine} ${dateF}`));
+  children.push(new Paragraph({ text: "", spacing: { before: 80, after: 80 } }));
+
+  // Intro (optionnelle)
   if (j.introduction) {
     children.push(new Paragraph({
-      spacing: { before: 80, after: 80 },
-      children: [new TextRun({ text: j.introduction, size: 22, color: "13203F" })]
+      spacing: { before: 60, after: 60 },
+      children: [new TextRun({
+        text: j.introduction,
+        size: 22,
+        color: COULEURS.BLEU_MARINE,
+        font: POLICE_PRINCIPALE
+      })]
     }));
   }
 
   // Travaux
   j.travaux.forEach(t => {
-    if (!t.texte.trim()) return;
+    if (!t.texte || !t.texte.trim()) return;
     children.push(new Paragraph({
-      numbering: { reference: t.niveau === 0 ? "bullets" : "subbullets", level: 0 },
-      spacing: { before: 50, after: 50 },
-      children: [new TextRun({ text: t.texte, size: 22, color: "13203F" })]
+      numbering: { reference: t.niveau === 0 ? "puces" : "souspuces", level: 0 },
+      spacing: { before: 40, after: 40 },
+      children: [new TextRun({
+        text: t.texte,
+        size: 22,
+        color: COULEURS.BLEU_MARINE,
+        font: POLICE_PRINCIPALE
+      })]
     }));
   });
 
   // Sections photos
   for (const sec of j.sectionsPhotos) {
-    await ajouterSectionPhotosWord(children, sec, docx);
+    await ajouterSectionPhotosWord(children, sec);
   }
 }
 
-function noBordersDocx(docx) {
-  const none = { style: docx.BorderStyle.NONE, size: 0, color: "FFFFFF" };
-  return { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none };
-}
-
-async function ajouterSectionPhotosWord(children, sec, docx) {
+async function ajouterSectionPhotosWord(children, sec) {
   const { Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
-          AlignmentType, BorderStyle, WidthType, VerticalAlign, ShadingType } = docx;
+          AlignmentType, BorderStyle, WidthType, VerticalAlign, ShadingType } = window.docx;
 
+  // Titre de la section (en italique)
   if (sec.titre) {
     children.push(new Paragraph({
       spacing: { before: 200, after: 100 },
-      children: [new TextRun({ text: sec.titre, italics: true, size: 22, color: "13203F" })]
+      children: [new TextRun({
+        text: sec.titre,
+        italics: true,
+        size: 22,
+        color: COULEURS.BLEU_MARINE,
+        font: POLICE_PRINCIPALE
+      })]
     }));
   }
 
@@ -1390,30 +1742,33 @@ async function ajouterSectionPhotosWord(children, sec, docx) {
   if (photosValides.length === 0) return;
 
   const cols = sec.colonnes || 3;
-  const totalWidth = 9026;
-  const cellWidth = Math.floor(totalWidth / cols);
-  // Taille de l'image en pixels (1 pixel ≈ 9525 EMU, transformation utilise px)
-  const cellPx = Math.floor(cellWidth / 15); // approx
+  const TOTAL_DXA = 9000;
+  const cellWidthDXA = Math.floor(TOTAL_DXA / cols);
+  // Largeur cellule en pixels (1 DXA ≈ 1/20 pt ≈ 1/1440 inch ≈ 96/1440 px)
+  const cellWidthPx = Math.floor(cellWidthDXA * 96 / 1440);
+
+  // Calcul taille image selon ratio
   let imgWidth, imgHeight;
+  const margePhoto = 8;
+  const wPhoto = cellWidthPx - margePhoto;
   if (sec.ratio === "portrait") {
-    imgWidth = cellPx;
-    imgHeight = Math.floor(cellPx * 4 / 3);
+    imgWidth = wPhoto;
+    imgHeight = Math.floor(wPhoto * 4 / 3);
   } else if (sec.ratio === "landscape") {
-    imgWidth = cellPx;
-    imgHeight = Math.floor(cellPx * 3 / 4);
+    imgWidth = wPhoto;
+    imgHeight = Math.floor(wPhoto * 3 / 4);
   } else if (sec.ratio === "square") {
-    imgWidth = cellPx;
-    imgHeight = cellPx;
+    imgWidth = wPhoto;
+    imgHeight = wPhoto;
   } else {
-    imgWidth = cellPx;
-    imgHeight = Math.floor(cellPx * 4 / 3);
+    imgWidth = wPhoto;
+    imgHeight = Math.floor(wPhoto * 4 / 3);
   }
 
-  // Bordure violette
-  const violetBd = { style: BorderStyle.SINGLE, size: 16, color: "D9D1F6" };
+  const violetBd = { style: BorderStyle.SINGLE, size: 16, color: COULEURS.VIOLET_CONTOUR };
   const allBd = { top: violetBd, bottom: violetBd, left: violetBd, right: violetBd };
 
-  // Construire les lignes de tableau
+  // Construire les lignes du tableau (cols photos par ligne)
   for (let i = 0; i < photosValides.length; i += cols) {
     const rowPhotos = photosValides.slice(i, i + cols);
     while (rowPhotos.length < cols) rowPhotos.push(null);
@@ -1422,28 +1777,49 @@ async function ajouterSectionPhotosWord(children, sec, docx) {
     for (const p of rowPhotos) {
       if (!p) {
         cells.push(new TableCell({
-          borders: noBordersDocx(docx),
-          width: { size: cellWidth, type: WidthType.DXA },
+          borders: noBordersWord(),
+          width: { size: cellWidthDXA, type: WidthType.DXA },
           children: [new Paragraph({ children: [new TextRun({ text: "" })] })]
         }));
         continue;
       }
-      const imgBytes = await dataUrlToUint8Array(p.dataUrl);
-      const imgTypeMatch = p.dataUrl.match(/data:image\/(\w+);/);
-      let imgType = imgTypeMatch ? imgTypeMatch[1].toLowerCase() : "jpg";
-      if (imgType === "jpeg") imgType = "jpg";
 
+      // Détection du type d'image
+      const imgBytes = await dataUrlToUint8Array(p.dataUrl);
+      const m = p.dataUrl.match(/data:image\/(\w+);/);
+      let imgType = m ? m[1].toLowerCase() : "jpeg";
+      if (imgType === "jpg") imgType = "jpeg";
+
+      // Construction de la cellule photo
+      // Pour reproduire la "légende blanche superposée" : on met d'abord
+      // un mini-tableau d'1 cellule blanche avec la légende, puis l'image
+      // juste en dessous. Ce n'est pas une SUPERPOSITION exacte (Word ne
+      // gère pas les images flottantes proprement dans un tableau imbriqué),
+      // mais le rendu visuel reste très propre : étiquette blanche au-dessus
+      // de la photo, dans le même cadre violet.
       const cellChildren = [];
+
       if (p.legende && p.afficherLegende !== false) {
+        // Mini paragraphe encadré pour la légende
         cellChildren.push(new Paragraph({
-          spacing: { before: 0, after: 30 },
-          border: { top: { style: BorderStyle.SINGLE, size: 4, color: "999999" },
-                    bottom: { style: BorderStyle.SINGLE, size: 4, color: "999999" },
-                    left: { style: BorderStyle.SINGLE, size: 4, color: "999999" },
-                    right: { style: BorderStyle.SINGLE, size: 4, color: "999999" } },
-          children: [new TextRun({ text: p.legende, size: 16 })]
+          alignment: AlignmentType.LEFT,
+          spacing: { before: 0, after: 40 },
+          shading: { fill: "FFFFFF", type: ShadingType.CLEAR },
+          border: {
+            top:    { style: BorderStyle.SINGLE, size: 4, color: "999999" },
+            bottom: { style: BorderStyle.SINGLE, size: 4, color: "999999" },
+            left:   { style: BorderStyle.SINGLE, size: 4, color: "999999" },
+            right:  { style: BorderStyle.SINGLE, size: 4, color: "999999" }
+          },
+          children: [new TextRun({
+            text: " " + p.legende + " ",
+            size: 16, // 8pt
+            color: COULEURS.BLEU_MARINE,
+            font: POLICE_PRINCIPALE
+          })]
         }));
       }
+
       cellChildren.push(new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
@@ -1456,21 +1832,22 @@ async function ajouterSectionPhotosWord(children, sec, docx) {
 
       cells.push(new TableCell({
         borders: allBd,
-        width: { size: cellWidth, type: WidthType.DXA },
+        width: { size: cellWidthDXA, type: WidthType.DXA },
         verticalAlign: VerticalAlign.TOP,
-        margins: { top: 0, bottom: 0, left: 0, right: 0 },
+        margins: { top: 40, bottom: 40, left: 40, right: 40 },
+        shading: { fill: COULEURS.VIOLET_CONTOUR, type: ShadingType.CLEAR },
         children: cellChildren
       }));
     }
 
     children.push(new Table({
-      width: { size: totalWidth, type: WidthType.DXA },
-      columnWidths: Array(cols).fill(cellWidth),
-      borders: noBordersDocx(docx),
+      width: { size: TOTAL_DXA, type: WidthType.DXA },
+      columnWidths: Array(cols).fill(cellWidthDXA),
+      borders: noBordersWord(),
       rows: [new TableRow({ children: cells })]
     }));
 
-    children.push(new Paragraph({ text: "", spacing: { before: 80, after: 80 } }));
+    children.push(new Paragraph({ text: "", spacing: { before: 100, after: 100 } }));
   }
 }
 
@@ -1479,7 +1856,6 @@ async function dataUrlToUint8Array(dataUrl) {
   const buf = await res.arrayBuffer();
   return new Uint8Array(buf);
 }
-
 /* ====================================================================
    AJOUT DU FOND DE PAGE AU DOCUMENT WORD (DÉGRADÉ VML)
    ==================================================================== */
