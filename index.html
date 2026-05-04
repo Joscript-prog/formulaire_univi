@@ -325,57 +325,19 @@
     font-size: 13pt; margin: 8px 0; color: var(--bleu-marine);
   }
 
-  /* Sections photos - VERSION AMÉLIORÉE */
-.doc-photo-section { margin: 18px 0; }
-.doc-photo-section .section-title {
-  font-style: italic;
-  font-size: 13pt;
-  margin-bottom: 10px;
-  color: var(--bleu-marine);
-}
+  /* Sections photos */
+  .doc-photo-section { margin: 18px 0; }
+  .doc-photo-section .section-title {
+    font-style: italic;
+    font-size: 13pt;
+    margin-bottom: 10px;
+    color: var(--bleu-marine);
+  }
+  .doc-photos { display: grid; gap: 14px; }
+  .doc-photos.cols-1 { grid-template-columns: 1fr; }
+  .doc-photos.cols-2 { grid-template-columns: 1fr 1fr; }
+  .doc-photos.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 
-.doc-photos {
-  display: grid;
-  gap: 14px;
-  justify-content: center;
-  align-items: start;
-}
-.doc-photos.cols-1 { grid-template-columns: 1fr; }
-.doc-photos.cols-2 { grid-template-columns: 1fr 1fr; }
-.doc-photos.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
-
-.doc-photo {
-  background: var(--violet-contour);
-  padding: 8px;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 3px 3px 10px rgba(0,0,0,0.2);
-}
-.doc-photo.ratio-portrait { aspect-ratio: 3/4; }
-.doc-photo.ratio-landscape { aspect-ratio: 4/3; }
-.doc-photo.ratio-square { aspect-ratio: 1/1; }
-
-.doc-photo img {
-  width: 100%; height: 100%; object-fit: cover;
-}
-
-/* Photos plus grandes quand il y en a peu */
-.doc-photos.cols-1 .doc-photo,
-.doc-photos.cols-2 .doc-photo {
-  max-height: 520px;
-}
-
-.doc-photo .photo-label {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: white;
-  border: 1px solid #999;
-  padding: 3px 12px;
-  font-size: 9pt;
-  color: var(--bleu-marine);
-  z-index: 2;
-}
   /* Photo : fond violet pâle + ombre + légende SUPERPOSÉE en haut-gauche */
   .doc-photo {
     background: var(--violet-contour);
@@ -428,34 +390,6 @@
     font-size: 13px; color: #78350f;
   }
   .help-text { font-size: 12px; color: #6b7280; margin: 0 0 10px; }
-
-  /* Marqueur invisible pour repérer les "zones de coupe sûres" lors de la pagination PDF */
-  .page-cut-marker {
-    height: 0;
-    line-height: 0;
-    font-size: 0;
-    visibility: hidden;
-  }
-  .doc-photos {
-  justify-content: center;
-  align-items: center;
-}
-
-.doc-photo {
-  box-shadow: 3px 3px 10px rgba(0,0,0,0.2);
-  background: white;
-  padding: 8px;
-}
-
-.doc-photo img {
-  transition: none;
-}
-
-/* Force les photos à prendre plus d'espace quand il y en a peu */
-.doc-photos.cols-1 .doc-photo,
-.doc-photos.cols-2 .doc-photo {
-  max-height: 420px;
-}
 
   /* Loading overlay */
   .loading-overlay {
@@ -1096,31 +1030,20 @@ function renderPuces(items) {
 }
 
 function renderSectionPhotos(sec) {
-  const nbPhotos = (sec.photos || []).length;
-  let cols = sec.colonnes || 3;
-
-  // Adaptation intelligente du nombre de colonnes
-  if (nbPhotos === 1) cols = 1;
-  else if (nbPhotos <= 4) cols = 2;
-  else cols = 3;
-
   let html = `<div class="doc-photo-section">`;
   if (sec.titre) html += `<div class="section-title">${escapeHtml(sec.titre)}</div>`;
-
-  html += `<div class="doc-photos cols-${cols}">`;
-
+  html += `<div class="doc-photos cols-${sec.colonnes}">`;
   (sec.photos || []).forEach(p => {
     const ratioClass = `ratio-${sec.ratio || 'portrait'}`;
-    html += `
-      <div class="doc-photo ${ratioClass}">
-        <div class="img-wrapper">
-          ${p.dataUrl ? `<img src="${p.dataUrl}">` : ''}
-        </div>
-        ${p.legende && p.afficherLegende !== false ? 
-          `<div class="photo-label">${escapeHtml(p.legende)}</div>` : ''}
-      </div>`;
+    html += `<div class="doc-photo ${ratioClass}">`;
+    html += `<div class="img-wrapper">`;
+    if (p.dataUrl) html += `<img src="${p.dataUrl}">`;
+    html += `</div>`;
+    if (p.legende && p.afficherLegende !== false) {
+      html += `<div class="photo-label">${escapeHtml(p.legende)}</div>`;
+    }
+    html += `</div>`;
   });
-
   html += `</div></div>`;
   return html;
 }
@@ -1168,27 +1091,17 @@ function rafraichirApercu() {
 
 /* ====================================================================
    PAGINATION INTELLIGENTE pour le PDF
-   Stratégie : on construit UNE SEULE longue page HTML avec tout le contenu,
-   on la capture intégralement avec html2canvas, puis on découpe le grand
-   canvas en tranches de 297mm (A4). Pour éviter de couper une photo en
-   2, on détecte les "zones de coupe sûres" (espaces vides) à proximité
-   de la position théorique de découpe.
+   Construit dynamiquement les pages en mesurant la hauteur des blocs.
+   Une photo / une section photos n'est JAMAIS coupée entre 2 pages.
    ==================================================================== */
-
-/**
- * Construit une longue page HTML contenant TOUT le contenu (toutes les
- * journées, toutes les sections photos, etc.) sans pagination.
- * Cette page peut être très haute, mais peu importe : on la capture en
- * une fois puis on la découpe.
- */
-function construireLonguePageHTML() {
+function construireDocumentComplet() {
   const titre1 = document.getElementById("titre_ligne1").value;
   const titre2 = document.getElementById("titre_ligne2").value;
 
-  // Une "doc-page" avec hauteur LIBRE (pas .page-fixed)
-  let html = `<div class="doc-page" style="height:auto; min-height:0;">`;
+  let html = `<div class="doc-page">`;
   html += renderEntete(titre1, titre2);
 
+  // Métadonnées
   if (appState.metaFields.length > 0) {
     html += `<div class="doc-meta">`;
     appState.metaFields.forEach(f => {
@@ -1198,21 +1111,25 @@ function construireLonguePageHTML() {
     html += `</div>`;
   }
 
-  // Marqueur invisible pour repérer les "zones de coupe sûres"
-  // (= les espaces de respiration entre les blocs)
+  // Journées
   appState.journees.forEach(j => {
-    html += `<div class="page-cut-marker"></div>`;
-    html += renderJournee(j);
+    const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
+    html += `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
+    if (j.introduction) {
+      html += `<div class="doc-travaux"><div class="intro-text">${escapeHtml(j.introduction)}</div></div>`;
+    }
+    if (j.travaux.length > 0) {
+      html += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
+    }
+    j.sectionsPhotos.forEach(sec => {
+      html += renderSectionPhotos(sec);
+    });
   });
 
+  // Pages extra
   appState.pagesExtra.forEach(page => {
-    // Saut de page forcé : on ferme et on ouvre une nouvelle .doc-page
-    html += `</div><div class="doc-page" style="height:auto; min-height:0;">`;
-    html += renderEntete(titre1, titre2);
-    html += `<div class="page-cut-marker"></div>`;
     html += `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
     page.blocs.forEach(bloc => {
-      html += `<div class="page-cut-marker"></div>`;
       if (bloc.type === "texte") {
         html += `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`;
       } else if (bloc.type === "puces") {
@@ -1226,120 +1143,189 @@ function construireLonguePageHTML() {
   html += `</div>`;
   return html;
 }
+  // Fonction de mesure : insère un fragment et retourne sa hauteur
+  function mesurerH(htmlFragment) {
+    const probe = document.createElement("div");
+    probe.style.width = `calc(210mm - 36mm)`; // largeur utile = page - 2x padding
+    probe.innerHTML = htmlFragment;
+    tmp.appendChild(probe);
+    const h = probe.offsetHeight;
+    tmp.removeChild(probe);
+    return h;
+  }
 
-/**
- * Attend que toutes les <img> d'un élément soient chargées.
- */
-function attendreToutesLesImages(element) {
-  const imgs = element.querySelectorAll("img");
-  if (imgs.length === 0) return Promise.resolve();
-  return Promise.all(Array.from(imgs).map(img => {
-    if (img.complete && img.naturalHeight > 0) return Promise.resolve();
-    return new Promise(resolve => {
-      img.onload = () => resolve();
-      img.onerror = () => resolve();
-      setTimeout(() => resolve(), 5000); // timeout 5s
+  // 2) Construction de la liste de blocs atomiques (indissociables)
+  const blocs = [];
+
+  // Bloc métadonnées
+  if (appState.metaFields.length > 0) {
+    let html = `<div class="doc-meta">`;
+    appState.metaFields.forEach(f => {
+      if (!f.label && !f.value) return;
+      html += `<p>${escapeHtml(f.label)} : ${escapeHtml(f.value)}</p>`;
     });
-  }));
-}
+    html += `</div>`;
+    blocs.push({ html });
+  }
 
-/**
- * Capture chaque .doc-page (qui peut être très haute) avec html2canvas
- * et la découpe en plusieurs tranches A4 si nécessaire.
- * Retourne un tableau de canvases A4 (un par page PDF).
- */
-async function capturerPagesA4() {
-  const tmp = document.createElement("div");
-  tmp.style.position = "absolute";
-  tmp.style.left = "-99999px";
-  tmp.style.top = "0";
-  tmp.style.width = "210mm";
-  document.body.appendChild(tmp);
+  // Pour chaque journée
+  appState.journees.forEach(j => {
+    const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
+    let teteJournee = `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
+    if (j.introduction) {
+      teteJournee += `<div class="doc-travaux"><div class="intro-text">${escapeHtml(j.introduction)}</div></div>`;
+    }
+    if (j.travaux.length > 0) {
+      teteJournee += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
+    }
+    blocs.push({ html: teteJournee });
 
-  tmp.innerHTML = construireLonguePageHTML();
-
-  await attendreToutesLesImages(tmp);
-  await new Promise(r => setTimeout(r, 500));
-
-  const docPages = tmp.querySelectorAll(".doc-page");
-  const canvasesA4 = [];
-  const SCALE = 2;
-  const A4_W_PX = Math.round(210 * 3.7795 * SCALE);
-  const A4_H_PX = Math.round(297 * 3.7795 * SCALE);
-
-  for (let docIdx = 0; docIdx < docPages.length; docIdx++) {
-    const docPage = docPages[docIdx];
-    const canvas = await html2canvas(docPage, {
-      scale: SCALE,
-      useCORS: true,
-      backgroundColor: null,
-      logging: false
+    // Chaque section photos = 1 bloc atomique
+    j.sectionsPhotos.forEach(sec => {
+      blocs.push({ html: renderSectionPhotos(sec) });
     });
+  });
 
-    let curY = 0;
-    const totalH = canvas.height;
-
-    while (curY < totalH) {
-      let cutY = Math.min(curY + A4_H_PX, totalH);
-
-      const tranche = document.createElement("canvas");
-      tranche.width = A4_W_PX;
-      tranche.height = A4_H_PX;
-      const ctx = tranche.getContext("2d");
-
-      const sliceH = cutY - curY;
-      ctx.drawImage(canvas, 0, curY, A4_W_PX, sliceH, 0, 0, A4_W_PX, sliceH);
-
-      // EXTENSION DU DÉGRADÉ → FINI LE NOIR EN BAS
-      if (sliceH < A4_H_PX) {
-        ctx.drawImage(
-          canvas,
-          0, Math.max(0, cutY - 8),
-          A4_W_PX, 8,
-          0, sliceH,
-          A4_W_PX, A4_H_PX - sliceH
-        );
+  // Pages extra (saut de page imposé entre chaque)
+  appState.pagesExtra.forEach((page, idx) => {
+    blocs.push({
+      html: `<div class="doc-banner">${escapeHtml(page.titre)}</div>`,
+      forcerNouvellePage: true
+    });
+    page.blocs.forEach(bloc => {
+      if (bloc.type === "texte") {
+        blocs.push({
+          html: `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`
+        });
+      } else if (bloc.type === "puces") {
+        blocs.push({
+          html: `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`
+        });
+      } else if (bloc.type === "photos") {
+        blocs.push({ html: renderSectionPhotos(bloc) });
       }
+    });
+  });
 
-      canvasesA4.push(tranche);
-      curY = cutY;
+  // 3) Distribution des blocs sur les pages
+  const pagesContenu = [];
+  let pageActuelle = "";
+  let hActuelle = 0;
+
+  function clore() {
+    if (pageActuelle) {
+      pagesContenu.push(pageActuelle);
+      pageActuelle = "";
+      hActuelle = 0;
     }
   }
 
+  for (const b of blocs) {
+    const h = mesurerH(b.html);
+
+    if (b.forcerNouvellePage) {
+      clore();
+    }
+
+    // Si le bloc seul dépasse la hauteur utile (cas extrême : énorme section photos),
+    // on l'insère sur une page dédiée. Le navigateur le coupera mais c'est inévitable.
+    // Pour éviter le crop, l'utilisateur doit limiter à ~9 photos par section.
+    if (h > HAUTEUR_UTILE) {
+      clore();
+      pagesContenu.push(b.html);
+      continue;
+    }
+
+    if (hActuelle + h > HAUTEUR_UTILE) {
+      clore();
+    }
+    pageActuelle += b.html;
+    hActuelle += h;
+  }
+  clore();
+
+  // 4) Nettoyage
   document.body.removeChild(tmp);
-  return canvasesA4;
+
+  // 5) Construction du HTML final paginé
+  let html = "";
+  pagesContenu.forEach(contenu => {
+    html += `<div class="doc-page page-fixed">`;
+    html += renderEntete(titre1, titre2);
+    html += contenu;
+    html += `</div>`;
+  });
+
+  return html;
 }
+
 /* ====================================================================
    GÉNÉRATION PDF (avec pagination intelligente anti-crop)
    ==================================================================== */
 async function genererPDF() {
   showLoading('Préparation du PDF…');
   try {
-    // Capturer toutes les pages A4 (avec découpage intelligent)
-    const canvasesA4 = await capturerPagesA4();
+    // 1. Générer le document complet dans la zone d'aperçu
+    const previewArea = document.getElementById("preview_area");
+    const apercuOriginal = previewArea.innerHTML;
+    const htmlComplet = construireDocumentComplet();
+    previewArea.innerHTML = htmlComplet;
+    await new Promise(r => setTimeout(r, 500)); // attente rendu
 
-    if (canvasesA4.length === 0) {
+    // 2. Récupérer l'élément contenant tout le document
+    const docElement = previewArea.querySelector(".doc-page");
+    if (!docElement) {
       alert("Veuillez d'abord remplir le formulaire.");
       hideLoading();
       return;
     }
 
-    showLoading(`Assemblage du PDF (${canvasesA4.length} pages)…`);
+    // 3. Calculer dimensions totales en pixels
+    const totalHeight = docElement.scrollHeight;
+    const pageHeightPx = 297 * 3.7795; // 297 mm en pixels (96 DPI ≈ 3.7795 px/mm)
+
+    // 4. Capturer toute la hauteur
+    const canvas = await html2canvas(docElement, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: null,
+      width: docElement.scrollWidth,
+      height: totalHeight,
+      windowWidth: docElement.scrollWidth,
+      windowHeight: totalHeight
+    });
+
+    // 5. Découper en pages A4
+    const nbPages = Math.ceil(totalHeight / pageHeightPx);
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-    const w = pdf.internal.pageSize.getWidth();
-    const h = pdf.internal.pageSize.getHeight();
+    const pageWidthPx = docElement.scrollWidth; // largeur de la page
 
-    for (let i = 0; i < canvasesA4.length; i++) {
-      const imgData = canvasesA4[i].toDataURL("image/jpeg", 0.92);
+    for (let i = 0; i < nbPages; i++) {
+      showLoading(`Page ${i+1}/${nbPages}…`);
+      // Extraire la portion correspondante
+      const yOffset = i * pageHeightPx;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = pageWidthPx * 2; // scale 2
+      tempCanvas.height = Math.min(pageHeightPx * 2, (totalHeight - yOffset) * 2);
+      const ctx = tempCanvas.getContext("2d");
+      ctx.drawImage(canvas, 0, yOffset * 2, pageWidthPx * 2, tempCanvas.height, 0, 0, tempCanvas.width, tempCanvas.height);
+
+      const imgData = tempCanvas.toDataURL("image/jpeg", 0.92);
+      const w = pdf.internal.pageSize.getWidth();
+      const h = pdf.internal.pageSize.getHeight();
       if (i > 0) pdf.addPage();
       pdf.addImage(imgData, "JPEG", 0, 0, w, h);
     }
 
+    // Sauvegarder
     const titre = document.getElementById("titre_ligne2").value || "rapport";
     const date = (appState.journees[0] && appState.journees[0].date) || new Date().toISOString().slice(0,10);
     pdf.save(`Compte_Rendu_${titre.replace(/\s+/g,"_")}_${date}.pdf`);
 
+    // Restaurer l'aperçu original
+    previewArea.innerHTML = apercuOriginal;
     hideLoading();
   } catch (err) {
     hideLoading();
@@ -1347,64 +1333,83 @@ async function genererPDF() {
     alert("❌ Erreur génération PDF : " + err.message);
   }
 }
-
 /* ====================================================================
    GÉNÉRATION WORD
-   STRATÉGIE : on capture les pages comme pour le PDF (pagination
-   intelligente), puis on insère chaque image-page dans un document Word.
-   Rendu 100% fidèle au template, mais contenu non éditable comme texte.
+   STRATÉGIE : on génère le PDF en interne, on convertit chaque page en
+   image, puis on insère ces images dans un nouveau document Word.
+   Le rendu est ainsi 100% identique au template (dégradé, polices,
+   logos, légendes superposées, etc.).
+   Inconvénient : le contenu n'est pas éditable comme du texte.
    ==================================================================== */
 async function genererWord() {
   showLoading('Préparation du Word…');
   try {
-    // 1) Capturer toutes les pages A4 (même logique que PDF)
-    const canvasesA4 = await capturerPagesA4();
+    const previewArea = document.getElementById("preview_area");
+    const apercuOriginal = previewArea.innerHTML;
+    const htmlComplet = construireDocumentComplet();
+    previewArea.innerHTML = htmlComplet;
+    await new Promise(r => setTimeout(r, 500));
 
-    if (canvasesA4.length === 0) {
+    const docElement = previewArea.querySelector(".doc-page");
+    if (!docElement) {
       alert("Veuillez d'abord remplir le formulaire.");
       hideLoading();
       return;
     }
 
-    // 2) Convertir chaque canvas en bytes
-    showLoading(`Préparation des images (${canvasesA4.length} pages)…`);
-    const imagesPages = [];
-    for (let i = 0; i < canvasesA4.length; i++) {
-      const dataUrl = canvasesA4[i].toDataURL("image/jpeg", 0.92);
-      const arrBuf = await (await fetch(dataUrl)).arrayBuffer();
-      imagesPages.push(new Uint8Array(arrBuf));
-    }
+    const totalHeight = docElement.scrollHeight;
+    const pageHeightPx = 297 * 3.7795; // 297 mm en pixels
 
-    // 3) Construire le document Word avec une image par page
-    showLoading('Assemblage du document Word…');
+    // Capturer tout
+    const canvas = await html2canvas(docElement, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: null,
+      width: docElement.scrollWidth,
+      height: totalHeight,
+      windowWidth: docElement.scrollWidth,
+      windowHeight: totalHeight
+    });
+
+    const nbPages = Math.ceil(totalHeight / pageHeightPx);
+    const pageWidthPx = docElement.scrollWidth;
+
     const {
       Document, Packer, Paragraph, ImageRun, PageBreak,
-      AlignmentType, convertInchesToTwip
+      AlignmentType
     } = window.docx;
 
-    // A4 = 210 x 297 mm = 8.27 x 11.69 inches
-    // En pixels (à 96 DPI) = 794 x 1123 px (sans marges)
-    // On insère l'image en pleine page, marges = 0 dans Word
-    const A4_W_PX = 794;   // 210mm à 96dpi
-    const A4_H_PX = 1123;  // 297mm à 96dpi
-
     const children = [];
-    imagesPages.forEach((imgBytes, idx) => {
+
+    for (let i = 0; i < nbPages; i++) {
+      showLoading(`Page ${i+1}/${nbPages}…`);
+      const yOffset = i * pageHeightPx;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = pageWidthPx * 2;
+      tempCanvas.height = Math.min(pageHeightPx * 2, (totalHeight - yOffset) * 2);
+      const ctx = tempCanvas.getContext("2d");
+      ctx.drawImage(canvas, 0, yOffset * 2, pageWidthPx * 2, tempCanvas.height, 0, 0, tempCanvas.width, tempCanvas.height);
+
+      const dataUrl = tempCanvas.toDataURL("image/jpeg", 0.92);
+      const arrBuf = await (await fetch(dataUrl)).arrayBuffer();
+      const imgBytes = new Uint8Array(arrBuf);
+
       children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
         spacing: { before: 0, after: 0 },
         children: [new ImageRun({
           data: imgBytes,
-          transformation: { width: A4_W_PX, height: A4_H_PX },
+          transformation: { width: 794, height: 1123 }, // A4 en pixels à 96 DPI
           type: "jpg"
         })]
       }));
-      if (idx < imagesPages.length - 1) {
+      if (i < nbPages - 1) {
         children.push(new Paragraph({
           children: [new PageBreak()]
         }));
       }
-    });
+    }
 
     const doc = new Document({
       creator: "IPKONEKT",
@@ -1421,11 +1426,11 @@ async function genererWord() {
     });
 
     const blob = await Packer.toBlob(doc);
-
     const titre = document.getElementById("titre_ligne2").value || "rapport";
     const date = (appState.journees[0] && appState.journees[0].date) || new Date().toISOString().slice(0,10);
     saveAs(blob, `Compte_Rendu_${titre.replace(/\s+/g,"_")}_${date}.docx`);
 
+    previewArea.innerHTML = apercuOriginal;
     hideLoading();
   } catch (err) {
     hideLoading();
