@@ -730,6 +730,11 @@ function renderSectionsPhotosJournee(jIdx) {
           <option value="auto" ${sec.ratio==='auto'?"selected":""}>Auto (taille naturelle)</option>
         </select>
         <button type="button" class="btn-remove btn-small" onclick="supprimerSectionJ(${jIdx}, ${sIdx})">🗑️</button>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px; white-space:nowrap;">
+          <input type="checkbox" ${sec.newPageAfter ? 'checked' : ''}
+                 onchange="majSectionNewPage(${jIdx}, ${sIdx}, this.checked)">
+          Passer à la page suivante après cette section
+        </label>
       </div>
       <div class="photos-grid cols-${sec.colonnes}" id="photos_grid_${jIdx}_${sIdx}"></div>
       <button type="button" class="btn btn-add btn-small" onclick="ajouterPhotoJ(${jIdx}, ${sIdx})">➕ Photo</button>
@@ -778,6 +783,10 @@ function majSectionColonnesJ(jIdx, sIdx, v) {
 }
 function majSectionRatioJ(jIdx, sIdx, v) {
   appState.journees[jIdx].sectionsPhotos[sIdx].ratio = v;
+}
+  function majSectionNewPage(jIdx, sIdx, checked) {
+  appState.journees[jIdx].sectionsPhotos[sIdx].newPageAfter = checked;
+  rafraichirApercu(); // Met à jour l'aperçu immédiatement
 }
 function ajouterPhotoJ(jIdx, sIdx) {
   appState.journees[jIdx].sectionsPhotos[sIdx].photos.push({ dataUrl: "", legende: "", afficherLegende: true });
@@ -1080,16 +1089,16 @@ function rafraichirApercu() {
     }
 
     j.sectionsPhotos.forEach((sec, sIdx) => {
-      contenuPage += renderSectionPhotos(sec);
+      // Avant d'ajouter la section, si newPageAfter est coché, on ferme la page actuelle
       if (sec.newPageAfter) {
-        // On ferme la page et on en ouvre une nouvelle
         contenuPage += `</div>`;
         html += contenuPage;
-        // Ajoute un séparateur visuel pour l'aperçu
         html += `<hr style="border: none; border-top: 4px dashed #E97132; margin: 20px 0;">`;
         contenuPage = `<div class="doc-page">`;
         contenuPage += renderEntete(titre1, titre2);
       }
+      // Ajouter la section à la page actuelle
+      contenuPage += renderSectionPhotos(sec);
     });
   });
 
@@ -1097,20 +1106,35 @@ function rafraichirApercu() {
   contenuPage += `</div>`;
   html += contenuPage;
 
+  // Pages Extra : les afficher dans l'aperçu
+  appState.pagesExtra.forEach((page) => {
+    html += `<hr style="border: none; border-top: 4px solid #E97132; margin: 20px 0;">`;
+    let pageHTML = `<div class="doc-page">`;
+    pageHTML += renderEntete(titre1, titre2);
+    pageHTML += `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
+    page.blocs.forEach(bloc => {
+      if (bloc.type === "texte") {
+        pageHTML += `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`;
+      } else if (bloc.type === "puces") {
+        pageHTML += `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`;
+      } else if (bloc.type === "photos") {
+        pageHTML += renderSectionPhotos(bloc);
+      }
+    });
+    pageHTML += `</div>`;
+    html += pageHTML;
+  });
+
   document.getElementById("preview_area").innerHTML = html;
 }
-
-   
-
-
 /* ====================================================================
-   CONSTRUCTION DU DOCUMENT PAGINÉ (Chaque section / saut de page = une page)
+   CONSTRUCTION DU DOCUMENT PAGINÉ
    ==================================================================== */
 function construireDocumentPagine() {
   const titre1 = document.getElementById("titre_ligne1").value;
   const titre2 = document.getElementById("titre_ligne2").value;
 
-  let pagesHTML = []; // Tableau contenant le HTML de chaque page
+  let pagesHTML = [];
 
   // Fonctions utilitaires pour les pages
   function ouvrirPage() {
@@ -1123,7 +1147,7 @@ function construireDocumentPagine() {
   // Démarrer la première page
   let contenuPage = ouvrirPage();
 
-  // Ajouter les métadonnées une fois au début
+  // Ajouter les métadonnées (une fois au début)
   if (appState.metaFields.length > 0) {
     contenuPage += `<div class="doc-meta">`;
     appState.metaFields.forEach(f => {
@@ -1133,9 +1157,9 @@ function construireDocumentPagine() {
     contenuPage += `</div>`;
   }
 
-  // Boucle sur les journées
-  appState.journees.forEach((j) => {
-    // Ajouter le bandeau, l'intro et les travaux de la journée
+  // Parcourir les journées
+  appState.journees.forEach((j, jIdx) => {
+    // Ajouter bandeau, intro, travaux de la journée
     const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
     contenuPage += `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
     if (j.introduction) {
@@ -1145,32 +1169,42 @@ function construireDocumentPagine() {
       contenuPage += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
     }
 
-    // Boucle sur les sections photos de cette journée
+    // Parcourir les sections photos
     j.sectionsPhotos.forEach((sec, sIdx) => {
-      // Ajouter la section à la page en cours
-      contenuPage += renderSectionPhotos(sec);
-
-      // Si on doit passer à la page suivante OU si c'est la dernière section
-      if (sec.newPageAfter || (sIdx === j.sectionsPhotos.length - 1)) {
-        // On ferme la page courante et on l'ajoute au tableau
+      // Si on doit passer à la page suivante, on ferme la page actuelle avant d'ajouter la section
+      if (sec.newPageAfter) {
         pagesHTML.push(fermerPage(contenuPage));
-        // On ouvre une nouvelle page (sauf si c'était la dernière section de la dernière journée)
-        // Mais on l'ouvre pour la prochaine itération. Si on est à la fin de tout, on ne l'ouvre pas.
         contenuPage = ouvrirPage();
       }
+      // Ajouter la section à la page actuelle
+      contenuPage += renderSectionPhotos(sec);
     });
+
+    // Après la dernière section de la journée, on ne ferme pas la page.
+    // On laisse la page ouverte pour les autres journées.
   });
 
-  // Pages Extra : chaque page extra est sa propre page
+  // Fermer la dernière page du document (journées)
+  if (contenuPage) {
+    pagesHTML.push(fermerPage(contenuPage));
+  }
+
+  // Pages Extra (chacune sur sa propre page)
   appState.pagesExtra.forEach((page) => {
-    pagesHTML.push(fermerPage(ouvrirPage() + `<div class="doc-banner">${escapeHtml(page.titre)}</div>`)); // Dans la vraie solution, on ajoute les blocs de la page extra ici
-    // Note : Le code pour les pages extra est plus complexe et doit être intégré.
+    let pageHTML = ouvrirPage();
+    pageHTML += `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
+    page.blocs.forEach(bloc => {
+      if (bloc.type === "texte") {
+        pageHTML += `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`;
+      } else if (bloc.type === "puces") {
+        pageHTML += `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`;
+      } else if (bloc.type === "photos") {
+        pageHTML += renderSectionPhotos(bloc);
+      }
+    });
+    pagesHTML.push(fermerPage(pageHTML));
   });
 
-  // Si la dernière page est ouverte mais vide, on ne l'ajoute pas
-  // Cette fonction construite ci-dessus génère les pages en fonction des sauts définis.
-  // Une version plus robuste est donnée ci-dessous. 
-  
   return pagesHTML;
 }
 
