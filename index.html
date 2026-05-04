@@ -984,16 +984,26 @@ function majPuceExtraNiveau(pIdx, bIdx, iIdx, v) { appState.pagesExtra[pIdx].blo
    ==================================================================== */
 function renderEntete(titre1, titre2) {
   return `
-    <div class="doc-header">
+    <div class="doc-header" style="height: 110px;">
       <img class="logo-ipk" src="${LOGO_IPKONEKT}" alt="IPKONEKT">
-      <div class="title-block">
-        <div class="title-main">${escapeHtml(titre1)}</div>
-        <div class="title-sub">${escapeHtml(titre2)}</div>
+      <div class="title-block" style="display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
+        <div class="title-main" style="font-size: 26pt; letter-spacing: 1px; font-weight: 800;">${escapeHtml(titre1)}</div>
+        <div class="title-sub" style="font-size: 26pt; letter-spacing: 1px; font-weight: 800; margin-top: auto;">${escapeHtml(titre2)}</div>
       </div>
       <img class="logo-bou" src="${LOGO_BOUYGUES}" alt="Bouygues Telecom">
-    </div>`;
+    </div>
+  `;
 }
-
+function renderEnteteSimple() {
+  return `
+    <div class="doc-header">
+      <img class="logo-ipk" src="${LOGO_IPKONEKT}" alt="IPKONEKT">
+      <div class="title-block" style="height: 110px;"></div>
+      <img class="logo-bou" src="${LOGO_BOUYGUES}" alt="Bouygues Telecom">
+    </div>
+  `;
+}
+  
 function renderJournee(j) {
   const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
   let html = `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
@@ -1174,19 +1184,28 @@ function construireDocumentPagine() {
   }
 
   // Fonctions utilitaires pour les pages
-  function ouvrirPage() {
-    return `<div class="doc-page page-fixed">${headerHTML}`;
+  let pageCount = 0;
+
+function ouvrirPage() {
+  pageCount++;
+  if (pageCount === 1) {
+    // Première page : en-tête complet avec titres
+    return `<div class="doc-page page-fixed">${renderEntete(titre1, titre2)}`;
+  } else {
+    // Pages suivantes : en-tête sans titres
+    return `<div class="doc-page page-fixed">${renderEnteteSimple()}`;
   }
-  function fermerPage(contenu) {
-    return contenu + `</div>`;
-  }
+}
+
+function fermerPage(contenu) {
+  return contenu + `</div>`;
+}
 
   // --- DÉMARRER LA PREMIÈRE PAGE ---
   contenuPage = ouvrirPage();
 
   // Ajouter les métadonnées (une fois au début)
-  let metaHTML = "";
-if (appState.metaFields.length > 0) {
+  if (appState.metaFields.length > 0) {
   contenuPage += `<div class="doc-meta">`;
   appState.metaFields.forEach(f => {
     if (!f.label.trim() && !f.value.trim()) return;
@@ -1194,9 +1213,7 @@ if (appState.metaFields.length > 0) {
   });
   contenuPage += `</div>`;
 }
-  contenuPage += metaHTML;
-  hauteurPage += mesurerH(metaHTML);
-
+  
   // --- BOUCLE SUR LES JOURNÉES ---
   appState.journees.forEach((j, jIdx) => {
     // Générer le contenu de la journée (bandeau, intro, travaux, sections photos)
