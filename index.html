@@ -276,8 +276,19 @@
     line-height: 1.25;
     padding: 0 8px;
   }
-  .doc-header .title-main { font-size: 26pt; letter-spacing: 0.2px; }
-  .doc-header .title-sub  { font-size: 26pt; letter-spacing: 0.2px; margin-top: 4px; }
+  .doc-header .title-main {
+  font-size: 22pt;
+  letter-spacing: 0.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+  .doc-header .title-sub {
+  font-size: 22pt;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  margin-top: 0;
+}
 
   /* Métadonnées : labels ET valeurs en bleu vif (#3B23E9), gras */
   .doc-meta {
@@ -986,9 +997,9 @@ function renderEntete(titre1, titre2) {
   return `
     <div class="doc-header" style="height: 110px;">
       <img class="logo-ipk" src="${LOGO_IPKONEKT}" alt="IPKONEKT">
-      <div class="title-block" style="display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
-        <div class="title-main" style="font-size: 26pt; letter-spacing: 1px; font-weight: 800;">${escapeHtml(titre1)}</div>
-        <div class="title-sub" style="font-size: 26pt; letter-spacing: 1px; font-weight: 800; margin-top: auto;">${escapeHtml(titre2)}</div>
+      <div class="title-block" style="display: flex; flex-direction: column; justify-content: space-between; height: 100%; align-items: center;">
+        <div class="title-main">${escapeHtml(titre1)}</div>
+        <div class="title-sub" style="margin-bottom: 10px;">${escapeHtml(titre2)}</div>
       </div>
       <img class="logo-bou" src="${LOGO_BOUYGUES}" alt="Bouygues Telecom">
     </div>
