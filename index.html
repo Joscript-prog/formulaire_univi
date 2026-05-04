@@ -1094,13 +1094,10 @@ function rafraichirApercu() {
    Construit dynamiquement les pages en mesurant la hauteur des blocs.
    Une photo / une section photos n'est JAMAIS coupée entre 2 pages.
    ==================================================================== */
-function construireDocumentComplet() {
+function construireContenuDocument() {
   const titre1 = document.getElementById("titre_ligne1").value;
   const titre2 = document.getElementById("titre_ligne2").value;
-
-  let html = `<div class="doc-page">`;
-  html += renderEntete(titre1, titre2);
-
+  let html = "";
   // Métadonnées
   if (appState.metaFields.length > 0) {
     html += `<div class="doc-meta">`;
@@ -1110,7 +1107,6 @@ function construireDocumentComplet() {
     });
     html += `</div>`;
   }
-
   // Journées
   appState.journees.forEach(j => {
     const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
@@ -1125,7 +1121,6 @@ function construireDocumentComplet() {
       html += renderSectionPhotos(sec);
     });
   });
-
   // Pages extra
   appState.pagesExtra.forEach(page => {
     html += `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
@@ -1139,10 +1134,19 @@ function construireDocumentComplet() {
       }
     });
   });
-
-  html += `</div>`;
   return html;
 }
+  function genererPagesHTML() {
+  const titre1 = document.getElementById("titre_ligne1").value;
+  const titre2 = document.getElementById("titre_ligne2").value;
+
+  // Conteneur temporaire pour mesurer
+  const tmp = document.createElement("div");
+  tmp.style.position = "absolute";
+  tmp.style.left = "-99999px";
+  tmp.style.top = "0";
+  tmp.style.width = "210mm";
+  tmp.style.visibil
   
 
 
