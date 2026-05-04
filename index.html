@@ -1070,13 +1070,13 @@ function rafraichirApercu() {
   contenuPage += renderEntete(titre1, titre2);
 
   if (appState.metaFields.length > 0) {
-    contenuPage += `<div class="doc-meta">`;
-    appState.metaFields.forEach(f => {
-      if (!f.label && !f.value) return;
-      contenuPage += `<p>${escapeHtml(f.label)} : ${escapeHtml(f.value)}</p>`;
-    });
-    contenuPage += `</div>`;
-  }
+  contenuPage += `<div class="doc-meta">`;
+  appState.metaFields.forEach(f => {
+    if (!f.label.trim() && !f.value.trim()) return;
+    contenuPage += `<p><strong>${escapeHtml(f.label)}</strong> : <span style="font-weight: normal;">${escapeHtml(f.value)}</span></p>`;
+  });
+  contenuPage += `</div>`;
+}
 
   appState.journees.forEach((j, jIdx) => {
     const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
@@ -1186,14 +1186,14 @@ function construireDocumentPagine() {
 
   // Ajouter les métadonnées (une fois au début)
   let metaHTML = "";
-  if (appState.metaFields.length > 0) {
-    metaHTML += `<div class="doc-meta">`;
-    appState.metaFields.forEach(f => {
-      if (!f.label && !f.value) return;
-      metaHTML += `<p>${escapeHtml(f.label)} : ${escapeHtml(f.value)}</p>`;
-    });
-    metaHTML += `</div>`;
-  }
+if (appState.metaFields.length > 0) {
+  contenuPage += `<div class="doc-meta">`;
+  appState.metaFields.forEach(f => {
+    if (!f.label.trim() && !f.value.trim()) return;
+    contenuPage += `<p><strong>${escapeHtml(f.label)}</strong> : <span style="font-weight: normal;">${escapeHtml(f.value)}</span></p>`;
+  });
+  contenuPage += `</div>`;
+}
   contenuPage += metaHTML;
   hauteurPage += mesurerH(metaHTML);
 
