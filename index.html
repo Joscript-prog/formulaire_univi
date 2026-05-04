@@ -325,19 +325,57 @@
     font-size: 13pt; margin: 8px 0; color: var(--bleu-marine);
   }
 
-  /* Sections photos */
-  .doc-photo-section { margin: 18px 0; }
-  .doc-photo-section .section-title {
-    font-style: italic;
-    font-size: 13pt;
-    margin-bottom: 10px;
-    color: var(--bleu-marine);
-  }
-  .doc-photos { display: grid; gap: 14px; }
-  .doc-photos.cols-1 { grid-template-columns: 1fr; }
-  .doc-photos.cols-2 { grid-template-columns: 1fr 1fr; }
-  .doc-photos.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  /* Sections photos - VERSION AMÉLIORÉE */
+.doc-photo-section { margin: 18px 0; }
+.doc-photo-section .section-title {
+  font-style: italic;
+  font-size: 13pt;
+  margin-bottom: 10px;
+  color: var(--bleu-marine);
+}
 
+.doc-photos {
+  display: grid;
+  gap: 14px;
+  justify-content: center;
+  align-items: start;
+}
+.doc-photos.cols-1 { grid-template-columns: 1fr; }
+.doc-photos.cols-2 { grid-template-columns: 1fr 1fr; }
+.doc-photos.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+.doc-photo {
+  background: var(--violet-contour);
+  padding: 8px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 3px 3px 10px rgba(0,0,0,0.2);
+}
+.doc-photo.ratio-portrait { aspect-ratio: 3/4; }
+.doc-photo.ratio-landscape { aspect-ratio: 4/3; }
+.doc-photo.ratio-square { aspect-ratio: 1/1; }
+
+.doc-photo img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+
+/* Photos plus grandes quand il y en a peu */
+.doc-photos.cols-1 .doc-photo,
+.doc-photos.cols-2 .doc-photo {
+  max-height: 520px;
+}
+
+.doc-photo .photo-label {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: white;
+  border: 1px solid #999;
+  padding: 3px 12px;
+  font-size: 9pt;
+  color: var(--bleu-marine);
+  z-index: 2;
+}
   /* Photo : fond violet pâle + ombre + légende SUPERPOSÉE en haut-gauche */
   .doc-photo {
     background: var(--violet-contour);
@@ -1061,23 +1099,22 @@ function renderSectionPhotos(sec) {
   const nbPhotos = (sec.photos || []).length;
   let cols = sec.colonnes || 3;
 
-  // Adaptation intelligente selon le nombre de photos
-  if (nbPhotos <= 1) cols = 1;
-  else if (nbPhotos <= 2) cols = 2;
+  // Adaptation intelligente du nombre de colonnes
+  if (nbPhotos === 1) cols = 1;
   else if (nbPhotos <= 4) cols = 2;
   else cols = 3;
 
   let html = `<div class="doc-photo-section">`;
   if (sec.titre) html += `<div class="section-title">${escapeHtml(sec.titre)}</div>`;
 
-  html += `<div class="doc-photos cols-${cols}" style="gap: 12px;">`;
+  html += `<div class="doc-photos cols-${cols}">`;
 
   (sec.photos || []).forEach(p => {
-    const ratio = sec.ratio || 'portrait';
+    const ratioClass = `ratio-${sec.ratio || 'portrait'}`;
     html += `
-      <div class="doc-photo ratio-${ratio}" style="aspect-ratio: ${ratio === 'portrait' ? '3/4' : ratio === 'landscape' ? '4/3' : '1/1'};">
+      <div class="doc-photo ${ratioClass}">
         <div class="img-wrapper">
-          ${p.dataUrl ? `<img src="${p.dataUrl}" style="object-fit: cover;">` : ''}
+          ${p.dataUrl ? `<img src="${p.dataUrl}">` : ''}
         </div>
         ${p.legende && p.afficherLegende !== false ? 
           `<div class="photo-label">${escapeHtml(p.legende)}</div>` : ''}
@@ -1222,21 +1259,16 @@ async function capturerPagesA4() {
   tmp.innerHTML = construireLonguePageHTML();
 
   await attendreToutesLesImages(tmp);
-  await new Promise(r => setTimeout(r, 400));
+  await new Promise(r => setTimeout(r, 500));
 
   const docPages = tmp.querySelectorAll(".doc-page");
   const canvasesA4 = [];
   const SCALE = 2;
-  const PAGE_W_MM = 210;
-  const PAGE_H_MM = 297;
-  const PX_PER_MM = 3.7795;
-  const A4_W_PX = Math.round(PAGE_W_MM * PX_PER_MM * SCALE);
-  const A4_H_PX = Math.round(PAGE_H_MM * PX_PER_MM * SCALE);
+  const A4_W_PX = Math.round(210 * 3.7795 * SCALE);
+  const A4_H_PX = Math.round(297 * 3.7795 * SCALE);
 
   for (let docIdx = 0; docIdx < docPages.length; docIdx++) {
     const docPage = docPages[docIdx];
-    showLoading(`Capture page ${docIdx+1}/${docPages.length}...`);
-
     const canvas = await html2canvas(docPage, {
       scale: SCALE,
       useCORS: true,
@@ -1250,24 +1282,20 @@ async function capturerPagesA4() {
     while (curY < totalH) {
       let cutY = Math.min(curY + A4_H_PX, totalH);
 
-      // Création de la page A4
       const tranche = document.createElement("canvas");
       tranche.width = A4_W_PX;
       tranche.height = A4_H_PX;
       const ctx = tranche.getContext("2d");
 
       const sliceH = cutY - curY;
-
-      // Dessin du contenu
       ctx.drawImage(canvas, 0, curY, A4_W_PX, sliceH, 0, 0, A4_W_PX, sliceH);
 
-      // === EXTENSION DU DÉGRADÉ POUR ÉVITER LE NOIR ===
+      // EXTENSION DU DÉGRADÉ → FINI LE NOIR EN BAS
       if (sliceH < A4_H_PX) {
-        // On étire le dernier pixel du contenu sur toute la hauteur restante
         ctx.drawImage(
           canvas,
-          0, cutY - 3,           // source : juste avant la coupe
-          A4_W_PX, 3,
+          0, Math.max(0, cutY - 8),
+          A4_W_PX, 8,
           0, sliceH,
           A4_W_PX, A4_H_PX - sliceH
         );
@@ -1281,7 +1309,6 @@ async function capturerPagesA4() {
   document.body.removeChild(tmp);
   return canvasesA4;
 }
-
 /* ====================================================================
    GÉNÉRATION PDF (avec pagination intelligente anti-crop)
    ==================================================================== */
