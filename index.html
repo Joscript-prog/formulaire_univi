@@ -1135,79 +1135,160 @@ function construireDocumentPagine() {
   const titre2 = document.getElementById("titre_ligne2").value;
 
   let pagesHTML = [];
+  let contenuPage = "";
+  let hauteurPage = 0;
+
+  // --- PAGE CONSTANTES (calculées une fois) ---
+  const tmp = document.createElement("div");
+  tmp.style.position = "absolute";
+  tmp.style.left = "-99999px";
+  tmp.style.top = "0";
+  tmp.style.width = "210mm"; // Largeur A4
+  tmp.style.visibility = "hidden";
+  document.body.appendChild(tmp);
+
+  // Mesure de l'en-tête une fois
+  const headerHTML = renderEntete(titre1, titre2);
+  const headerDiv = document.createElement("div");
+  headerDiv.innerHTML = headerHTML;
+  tmp.appendChild(headerDiv);
+  const hauteurEntete = headerDiv.offsetHeight;
+  tmp.removeChild(headerDiv);
+
+  // Hauteur utile de la page (en pixels) : 297mm - marges - entête
+  const HAUTEUR_PAGE_PX = 297 * 3.7795;  // 297mm en pixels (96dpi)
+  const PADDING_PX = 28 * 3.7795;        // 14mm haut + 14mm bas
+  const MARGE_SECURITE = 30;            // pour éviter les débordements
+  const HAUTEUR_UTILE = HAUTEUR_PAGE_PX - PADDING_PX - hauteurEntete - MARGE_SECURITE;
+
+  // Fonction pour mesurer le HTML d'un fragment
+  function mesurerH(htmlFragment) {
+    const probe = document.createElement("div");
+    probe.style.width = "210mm";
+    probe.style.padding = "0 18mm";
+    probe.innerHTML = htmlFragment;
+    tmp.appendChild(probe);
+    const h = probe.offsetHeight;
+    tmp.removeChild(probe);
+    return h;
+  }
 
   // Fonctions utilitaires pour les pages
   function ouvrirPage() {
-    return `<div class="doc-page page-fixed">${renderEntete(titre1, titre2)}`;
+    return `<div class="doc-page page-fixed">${headerHTML}`;
   }
   function fermerPage(contenu) {
     return contenu + `</div>`;
   }
 
-  // Démarrer la première page
-  let contenuPage = ouvrirPage();
+  // --- DÉMARRER LA PREMIÈRE PAGE ---
+  contenuPage = ouvrirPage();
 
   // Ajouter les métadonnées (une fois au début)
+  let metaHTML = "";
   if (appState.metaFields.length > 0) {
-    contenuPage += `<div class="doc-meta">`;
+    metaHTML += `<div class="doc-meta">`;
     appState.metaFields.forEach(f => {
       if (!f.label && !f.value) return;
-      contenuPage += `<p>${escapeHtml(f.label)} : ${escapeHtml(f.value)}</p>`;
+      metaHTML += `<p>${escapeHtml(f.label)} : ${escapeHtml(f.value)}</p>`;
     });
-    contenuPage += `</div>`;
+    metaHTML += `</div>`;
   }
+  contenuPage += metaHTML;
+  hauteurPage += mesurerH(metaHTML);
 
-  // Parcourir les journées
+  // --- BOUCLE SUR LES JOURNÉES ---
   appState.journees.forEach((j, jIdx) => {
-    // Ajouter bandeau, intro, travaux de la journée
+    // Générer le contenu de la journée (bandeau, intro, travaux, sections photos)
     const dateF = j.formatDate === "long" ? formaterDateLong(j.date) : formaterDateCourt(j.date);
-    contenuPage += `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
+    
+    let jourHTML = `<div class="doc-banner">JOURNEE ${escapeHtml(j.numero)} – ${escapeHtml(j.jourSemaine)} ${escapeHtml(dateF)}</div>`;
     if (j.introduction) {
-      contenuPage += `<div class="doc-travaux"><div class="intro-text">${escapeHtml(j.introduction)}</div></div>`;
+      jourHTML += `<div class="doc-travaux"><div class="intro-text">${escapeHtml(j.introduction)}</div></div>`;
     }
     if (j.travaux.length > 0) {
-      contenuPage += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
+      jourHTML += `<div class="doc-travaux">${renderPuces(j.travaux)}</div>`;
     }
 
-    // Parcourir les sections photos
+    // --- AJOUTER LA JOURNÉE À LA PAGE ACTUELLE ---
+    const hJour = mesurerH(jourHTML);
+    if (hauteurPage + hJour > HAUTEUR_UTILE) {
+      // Pas assez de place, on ferme la page et on en ouvre une nouvelle
+      pagesHTML.push(fermerPage(contenuPage));
+      contenuPage = ouvrirPage();
+      hauteurPage = 0;
+    }
+    contenuPage += jourHTML;
+    hauteurPage += hJour;
+
+    // --- BOUCLE SUR LES SECTIONS PHOTOS DE CETTE JOURNÉE ---
     j.sectionsPhotos.forEach((sec, sIdx) => {
-      // Si on doit passer à la page suivante, on ferme la page actuelle avant d'ajouter la section
+      const secHTML = renderSectionPhotos(sec);
+      const hSec = mesurerH(secHTML);
+
+      // Vérifier si la section tient dans la page actuelle
+      if (hauteurPage + hSec > HAUTEUR_UTILE) {
+        // Pas de place, on ferme la page et on en ouvre une nouvelle
+        pagesHTML.push(fermerPage(contenuPage));
+        contenuPage = ouvrirPage();
+        hauteurPage = 0;
+      }
+      contenuPage += secHTML;
+      hauteurPage += hSec;
+
+      // Si l'utilisateur a coché "Passer à la page suivante", on force la fermeture de la page
       if (sec.newPageAfter) {
         pagesHTML.push(fermerPage(contenuPage));
         contenuPage = ouvrirPage();
+        hauteurPage = 0;
       }
-      // Ajouter la section à la page actuelle
-      contenuPage += renderSectionPhotos(sec);
     });
-
-    // Après la dernière section de la journée, on ne ferme pas la page.
-    // On laisse la page ouverte pour les autres journées.
   });
 
-  // Fermer la dernière page du document (journées)
+  // --- TRAITEMENT DES PAGES EXTRA (Section 4) ---
+  // On essaye de les ajouter à la page actuelle si possible
+  for (const page of appState.pagesExtra) {
+    // Construire temporairement le contenu de la page extra
+    let extraHTML = `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
+    page.blocs.forEach(bloc => {
+      if (bloc.type === "texte") {
+        extraHTML += `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`;
+      } else if (bloc.type === "puces") {
+        extraHTML += `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`;
+      } else if (bloc.type === "photos") {
+        extraHTML += renderSectionPhotos(bloc);
+      }
+    });
+
+    const hExtra = mesurerH(extraHTML);
+    
+    // Vérifier si le contenu de la page extra tient dans la page actuelle
+    if (hauteurPage + hExtra > HAUTEUR_UTILE) {
+      // Pas de place, on ferme la page en cours et on en ouvre une nouvelle pour la page extra
+      if (contenuPage) {
+        pagesHTML.push(fermerPage(contenuPage));
+      }
+      contenuPage = ouvrirPage();
+      contenuPage += extraHTML;
+      hauteurPage = hExtra;
+    } else {
+      // Il y a de la place, on ajoute le contenu extra à la page actuelle
+      contenuPage += extraHTML;
+      hauteurPage += hExtra;
+    }
+  }
+
+  // --- FERMER LA DERNIÈRE PAGE ---
   if (contenuPage) {
     pagesHTML.push(fermerPage(contenuPage));
   }
 
-  // Pages Extra (chacune sur sa propre page)
-  appState.pagesExtra.forEach((page) => {
-    let pageHTML = ouvrirPage();
-    pageHTML += `<div class="doc-banner">${escapeHtml(page.titre)}</div>`;
-    page.blocs.forEach(bloc => {
-      if (bloc.type === "texte") {
-        pageHTML += `<div class="doc-text-block">${escapeHtml(bloc.contenu).replace(/\n/g, "<br>")}</div>`;
-      } else if (bloc.type === "puces") {
-        pageHTML += `<div class="doc-travaux">${renderPuces(bloc.items || [])}</div>`;
-      } else if (bloc.type === "photos") {
-        pageHTML += renderSectionPhotos(bloc);
-      }
-    });
-    pagesHTML.push(fermerPage(pageHTML));
-  });
+  // --- NETTOYAGE ---
+  document.body.removeChild(tmp);
+  tmp.remove();
 
   return pagesHTML;
 }
-
 /* ====================================================================
    GÉNÉRATION PDF (Base sur la structure de pages)
    ==================================================================== */
