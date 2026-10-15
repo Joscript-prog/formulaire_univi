@@ -480,12 +480,21 @@ function etatInitial() {
     titre1: 'COMPTE RENDU DE CHANTIER',
     site: '',
     objet: '', objetAuto: true,
-    champs: [{ label: 'TECHNICIEN REFERENT', value: '' }],
+    champs: [{ label: 'CHEF DE CHANTIER', value: '' }],
     semaine: lundi,
     jours: [0, 1, 2, 3, 4].map(i => nouveauJour(ajouterJours(lundi, i))),
     prevus: { intro: '', introAuto: true, texte: '' },
     difficultes: { texte: '', aucune: false }
   };
+}
+/* Anciens libellés du champ (INTERVENANT, TECHNICIEN REFERENT) -> CHEF DE CHANTIER, y compris dans les brouillons déjà enregistrés */
+const ANCIENS_LIBELLES = ['INTERVENANT', 'TECHNICIEN REFERENT'];
+function majLibelles(e) {
+  if (e && Array.isArray(e.champs)) e.champs.forEach(c => {
+    const l = (c.label || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+    if (ANCIENS_LIBELLES.includes(l)) c.label = 'CHEF DE CHANTIER';
+  });
+  return e;
 }
 function joursTries() { return [...etat.jours].sort((a, b) => a.date.localeCompare(b.date)); }
 function trouverJour(id) { return etat.jours.find(j => j.id === id); }
@@ -624,7 +633,7 @@ async function ouvrirBrouillon(id) {
 }
 function brouillonVierge() {
   const e = etatInitial();
-  if (etat) {                       // on garde le titre, les champs (ex : technicien référent) et la semaine en cours
+  if (etat) {                       // on garde le titre, les champs (ex : chef de chantier) et la semaine en cours
     e.titre1 = etat.titre1;
     e.champs = etat.champs.map(c => ({ label: c.label, value: c.value }));
     if (dateValide(etat.semaine)) {
@@ -1103,7 +1112,7 @@ async function importerBrouillon(fichier) {
   try {
     const obj = JSON.parse(await fichier.text());
     if (!obj || obj.application !== 'compte-rendu-ipkonekt' || !obj.etat || !Array.isArray(obj.etat.jours)) throw new Error('Ce fichier n\'est pas un brouillon de compte rendu.');
-    const e = Object.assign(etatInitial(), obj.etat);
+    const e = majLibelles(Object.assign(etatInitial(), obj.etat));
     // nouvelles références pour les photos : aucun mélange possible avec les autres brouillons
     const nouvelles = {};
     e.jours.forEach(j => j.sections.forEach(s => {
@@ -1468,14 +1477,14 @@ async function demarrer() {
       for (const k of cles) {
         if (typeof k === 'string' && k.startsWith('b:')) {
           const e = await baseLire('etat', k);
-          if (e && Array.isArray(e.jours)) brouillons.set(k.slice(2), Object.assign(etatInitial(), e));
+          if (e && Array.isArray(e.jours)) brouillons.set(k.slice(2), majLibelles(Object.assign(etatInitial(), e)));
         }
       }
       if (cles.includes('courant')) {          // version précédente du formulaire : un seul brouillon
         const e = await baseLire('etat', 'courant');
         if (e && Array.isArray(e.jours)) {
           const id = uid();
-          brouillons.set(id, Object.assign(etatInitial(), e));
+          brouillons.set(id, majLibelles(Object.assign(etatInitial(), e)));
           await baseEcrire('etat', cleBrouillon(id), brouillons.get(id));
         }
         await baseSupprimer('etat', 'courant');
